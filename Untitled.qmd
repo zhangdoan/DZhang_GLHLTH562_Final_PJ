@@ -1,0 +1,664 @@
+---
+title: "Drug Development in Europe"
+subtittle: "GLHLTH562 Presentation"
+author: "Daoheng Zhang"
+institute: "DGHI"
+date: today
+format:
+  revealjs: 
+    transition: slide
+    incremental: true
+    highlight-style: github
+    slide-number: c/t
+    scrollable: true
+---
+
+# Research Question {.smaller}
+
+-   **Dataset**: Data from 'TidyTuesday', collected through a small library called EMA_webScrapping which scraped and published information for each drug in the European Medicines Agency (EMA)\
+    <br>
+
+-   **Research interest**: The approval status of human drug which have applied listing in the EU this century\
+    <br>
+
+-   **Topic**
+
+    -   *Approval Status*: Authorised, Refused, and Withdrawn\
+    -   *Classification*: Reference Drug vs Generic drug/biosimilar, Orphan Drug vs Accelerated Assessment Drug vs Reference Drug
+
+::: notes
+My data come from Tidytuesday. A library called EMA_webScrapping scrapped and published information for each drug in European Medicines Agency, or EMA
+
+I am interested in the approval status of human drug which have submitted a new drug application in the EU after 2000
+
+I need to emphasize that before a new drug application, the candidate drug need to undergo three clinical trails and only drugs that have achieved good results in both safety and efficacy can apply a new drug approval.
+
+the drugs in this database have all undergone new drug applications, so the percentage of the approved drug was very high. and that is different from our understanding of drug development, only a few proportion of drugs can be marketed.
+:::
+
+```{r, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(readr)
+library(dataReporter)
+library(stringr)
+library(patchwork)
+library(ggrepel)
+library(ggvenn)
+
+Drug <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2023/2023-03-14/drugs.csv') 
+Drug <- Drug %>% filter(category == "human") %>%
+  filter(!is.na(marketing_authorisation_date) | !is.na(date_of_refusal_of_marketing_authorisation)) %>%
+  mutate(holder_name = str_extract(marketing_authorisation_holder_company_name, "\\w+")) %>%
+  mutate(holder_name = case_when(
+    holder_name == "Les" ~ "Servier",
+    holder_name == "Janssen" ~ "J&J",
+    holder_name == "Eli" ~ "Eli Lilly",
+    holder_name == "Bristol" ~ "BristolMyersSquibb",
+    holder_name == "N" ~ "Organon",
+    TRUE ~ holder_name
+  )) %>%
+  mutate(reference = ifelse(generic == FALSE & biosimilar == FALSE, TRUE, FALSE)) %>%
+    mutate(year = case_when(
+    authorisation_status == "authorised" ~ as.numeric(substr(marketing_authorisation_date, 1, 4)),
+    authorisation_status == "refused" ~ as.numeric(substr(date_of_refusal_of_marketing_authorisation, 1, 4)),
+    authorisation_status == "withdrawn" ~ as.numeric(substr(marketing_authorisation_date, 1, 4))
+  ))
+
+```
+
+------------------------------------------------------------------------
+
+<h3 style="font-size: 24px;">
+
+Approval Status of Human Reference Drug, 2000-2023
+
+</h3>
+
+::: notes
+Firstly, I categorized medicines into reference drugs and generic/biosimilar and this page shows the approval status of reference drug.
+
+In general, the number of the authorised reference drug is showing an increasing trend. on the contrary, the number of withdrawn reference drug is show a decreasing trend.
+
+As for the top 10 frequent indication in authorised reference drug. the types of indications were diverse, including non-communicable diseases like diabetes, CPOD, and lung cancer. And communicable diseases like HIV and Covid-19 infectious
+
+As for this scatter plot, I also draw a diagonal line. The x-axis is the number of application, and the y-axis is the number of authorised applications. so the closer the spot is to the diagonal line, the higher authorisation rate of the drug holder have. Novartis has applied the most new reference drug, but also has the most rejection. we can also seen many well-known pharmaceutical companies here. like Merck, Pfizer and J&J.
+:::
+
+```{r, include=FALSE,echo=FALSE}
+
+## Number of Reference Drugs per Year by Authorisation Status
+# data wrangling - count
+
+reference_drug_count_by_year <- Drug %>% 
+  filter(reference == TRUE) %>%
+  filter(year >= 2000 & year <= 2023) %>%
+  count(year, authorisation_status) %>%
+  tidyr::pivot_wider(
+    names_from = authorisation_status,
+    values_from = n,
+    values_fill = 0
+  ) %>%
+  tidyr::pivot_longer(
+    cols = c(authorised, refused, withdrawn),
+    names_to = "status",
+    values_to = "count"
+  )
+
+# defining color
+custom_colors <- c("authorised" = "#4ab57e", "refused" = "#e8b143", "withdrawn" = "#3b70c4")
+
+# ggplot
+p1 <- ggplot(reference_drug_count_by_year, aes(x = year, y = count, fill = status)) +
+  geom_col() +
+  scale_x_continuous(breaks = seq(2000, 2023, 5)) +
+  scale_fill_manual(values = custom_colors) +
+  labs(
+    title = "Number of Reference Drugs per Year by Authorisation Status",
+    x = "Year",
+    y = "Count"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.title.x = element_text(size = 30),
+    axis.title.y = element_text(size = 30),
+    axis.text.x = element_text(size = 25),
+    axis.text.y = element_text(size = 25),
+    legend.title = element_text(size = 25),
+    legend.text = element_text(size = 25),
+    title = element_text(size = 30),
+    legend.position = "bottom" 
+  )
+
+# stacked bar plot
+p1
+
+ggsave('ref1.png',width=16, height=9)
+
+## Top indications for reference drugs
+# Find the indications for all reference drugs in the database, count their quantity and sort them in descending order.
+reference_disease_counts <- Drug %>%
+  filter(reference == TRUE) %>%
+  filter(authorisation_status == "authorised") %>%
+  filter(year >= 2000 & year <= 2023) %>%
+  separate_rows(therapeutic_area, sep = ";") %>%
+  mutate(therapeutic_area = str_trim(therapeutic_area)) %>%
+  mutate(therapeutic_area = case_when(
+    therapeutic_area == "Carcinoma, Non-Small-Cell Lung" ~ "NSCLC",
+    therapeutic_area == "Pulmonary Disease, Chronic Obstructive" ~ "Chronic Pilmonary",
+    TRUE ~ therapeutic_area
+  )) %>%
+  count(therapeutic_area, sort = TRUE)
+
+reference_disease_counts
+
+# Select the top 10 diseases, and create the bar plot
+
+reference_top_10_diseases <- reference_disease_counts %>%
+  top_n(10, n)
+
+p2 <- ggplot(reference_top_10_diseases, aes(x = reorder(therapeutic_area, n), y = n)) +
+  geom_bar(stat = "identity", fill = "#4ab57e") +
+  coord_flip() +
+  labs(
+    title = "Top 10 Frequent Indication in Authurised Reference Drugs",
+    x = "Indication",
+    y = "Frequency"
+  ) +
+  theme_minimal() +
+  coord_flip() + 
+  theme(
+    axis.title.x = element_text(size = 30),
+    axis.title.y = element_text(size = 30),
+    axis.text.x = element_text(size = 25),
+    axis.text.y = element_text(size = 20),
+    title = element_text(size = 30)
+  )
+p2
+
+ggsave('ref2.png',width=16, height=9)
+
+
+## Drug Holders by Total Applications: Application vs Authorised Count
+# Summarize the data
+reference_holder_summary <- Drug %>% 
+  filter(reference == TRUE) %>%
+  filter(year >= 2000 & year <= 2023) %>%
+  group_by(holder_name, authorisation_status) %>%
+  summarise(application_count = n()) %>%
+  ungroup() %>%
+  spread(authorisation_status, application_count, fill = 0) %>%
+  mutate(total_applications = authorised + refused + withdrawn) %>%
+  arrange(desc(total_applications))
+
+# Select top 30 companies by total applications
+top_30_companies <- reference_holder_summary %>%
+  arrange(desc(total_applications)) %>%
+  head(30)
+
+# Plot the data
+p3 <- ggplot(top_30_companies, aes(x = total_applications, y = authorised, label = holder_name)) +
+  geom_point(aes(color = holder_name), size = 10, alpha = 0.8) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray", size = 2) +
+  labs(title = "Top 30 Reference Drug Holders: Application vs Authorised Count",
+       x = "Number of Applications",
+       y = "Number of Authorised Applications") +
+  theme_minimal() +
+  theme(
+    axis.title.x = element_text(size = 30),
+    axis.title.y = element_text(size = 30),
+    axis.text.x = element_text(size = 25),
+    axis.text.y = element_text(size = 25),
+    title = element_text(size = 30),
+    legend.position = "none"
+  ) +
+  geom_text_repel(size = 10)
+
+ggsave('ref3.png',width=16, height=16)
+
+(p1 / p2) | p3
+
+p123 <- (p1 / p2) | p3
+
+p123
+
+ggsave('ref123.png', width=32, height=16)
+                 
+
+```
+
+```{r, echo=FALSE}
+knitr::include_graphics('ref123.png')
+```
+
+------------------------------------------------------------------------
+
+<h3 style="font-size: 24px;">
+
+Approval Status of Human Generic & Biosimilar Drug, 2000-2023
+
+</h3>
+
+::: notes
+As for the generic/biosimilar drug, the number of authorised drug was fluctuating. 
+
+as for the most common indication. diabetes disappeared, the replacement was breast cancer, arthritis and lung cancer. For here, we can also see the patent protection situation for diabetes treatment drugs. 
+
+compared to reference drug, the authorization rate of generic/biosimilar drugs was much higher, with many spot on the diagonal line.
+:::
+
+```{r, include=FALSE,echo=FALSE}
+
+## Number of Generic & Biosimilar Drugs per Year by Authorisation Status
+# data wrangling - count
+generic_biosimilar_drug_count_by_year <- Drug %>% 
+  filter(reference == FALSE) %>%
+  filter(year >= 2000 & year <= 2023) %>%
+  count(year, authorisation_status) %>%
+  tidyr::pivot_wider(
+    names_from = authorisation_status,
+    values_from = n,
+    values_fill = 0
+  ) %>%
+  tidyr::pivot_longer(
+    cols = c(authorised, refused, withdrawn),
+    names_to = "status",
+    values_to = "count"
+  )
+
+# defining color
+custom_colors <- c("authorised" = "#f7892f", "refused" = "#eb4479", "withdrawn" = "#9a51e8")
+
+# ggplot
+p4 <- ggplot(generic_biosimilar_drug_count_by_year, aes(x = year, y = count, fill = status)) +
+  geom_col() +
+  scale_x_continuous(breaks = seq(2000, 2023, 5)) +
+  scale_fill_manual(values = custom_colors) +
+  labs(
+    title = "Number of Generic & Biosimilar Drugs by Authorisation Status",
+    x = "Year",
+    y = "Count"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.title.x = element_text(size = 30),
+    axis.title.y = element_text(size = 30),
+    axis.text.x = element_text(size = 25),
+    axis.text.y = element_text(size = 25),
+    legend.title = element_text(size = 25),
+    legend.text = element_text(size = 25),
+    title = element_text(size = 30),
+    legend.position = "bottom" 
+  )
+
+# stacked bar plot
+p4
+
+ggsave('generic4.png',width=16, height=9)
+
+## Top indications for generic & biosimilar drugs
+# Find the indications for all generic & biosimilar drugs in the database, count their quantity and sort them in descending order.
+generic_biosimilar_disease_counts <- Drug %>%
+  filter(reference == FALSE) %>%
+  filter(authorisation_status == "authorised") %>%
+  filter(year >= 2000 & year <= 2023) %>%
+  separate_rows(therapeutic_area, sep = ";") %>%
+  mutate(therapeutic_area = str_trim(therapeutic_area)) %>%
+  mutate(therapeutic_area = case_when(
+    therapeutic_area == "Carcinoma, Non-Small-Cell Lung" ~ "NSCLC",
+    therapeutic_area == "Pulmonary Disease, Chronic Obstructive" ~ "Chronic Pilmonary",
+    TRUE ~ therapeutic_area
+  )) %>%
+  count(therapeutic_area, sort = TRUE)
+
+generic_biosimilar_disease_counts
+
+# Select the top 10 diseases, and create the bar plot
+
+generic_biosimilar_top_10_diseases <- generic_biosimilar_disease_counts %>%
+  top_n(10, n)
+
+p5 <- ggplot(generic_biosimilar_top_10_diseases, aes(x = reorder(therapeutic_area, n), y = n)) +
+  geom_bar(stat = "identity", fill = "#f7892f") +
+  coord_flip() +
+  labs(
+    title = "Top 10 Indication in Authurised Generic & Biosimilar Drugs",
+    x = "Indication",
+    y = "Frequency"
+  ) +
+  theme_minimal() +
+  coord_flip() + 
+  theme(
+    axis.title.x = element_text(size = 30),
+    axis.title.y = element_text(size = 30),
+    axis.text.x = element_text(size = 25),
+    axis.text.y = element_text(size = 20),
+    title = element_text(size = 30)
+  )
+p5
+
+ggsave('generic5.png',width=16, height=9)
+
+
+## Drug Holders by Total Applications: Application vs Authorised Count
+# Summarize the data
+generic_biosimilar_holder_summary <- Drug %>% 
+  filter(reference == FALSE) %>%
+  filter(year >= 2000 & year <= 2023) %>%
+  group_by(holder_name, authorisation_status) %>%
+  summarise(application_count = n()) %>%
+  ungroup() %>%
+  spread(authorisation_status, application_count, fill = 0) %>%
+  mutate(total_applications = authorised + refused + withdrawn) %>%
+  arrange(desc(total_applications))
+
+# Select top 30 companies by total applications
+generic_biosimilar_top_30_companies <- generic_biosimilar_holder_summary %>%
+  arrange(desc(total_applications)) %>%
+  head(20)
+
+# Plot the data
+p6 <- ggplot(generic_biosimilar_top_30_companies, aes(x = total_applications, y = authorised, label = holder_name)) +
+  geom_point(aes(color = holder_name), size = 7, alpha = 0.8) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray", size = 2) +
+  labs(title = "Top 20 Generic & Biosimilar Drug Holders",
+       x = "Number of Applications",
+       y = "Number of Authorised Applications") +
+  theme_minimal() +
+  theme(
+    axis.title.x = element_text(size = 30),
+    axis.title.y = element_text(size = 30),
+    axis.text.x = element_text(size = 25),
+    axis.text.y = element_text(size = 25),
+    title = element_text(size = 30),
+    legend.position = "none"
+  ) +
+  geom_text_repel(size = 10)
+
+ggsave('generic6.png',width=16, height=16)
+
+(p4 / p5) | p6
+
+p456 <- (p4 / p5) | p6
+
+p456
+
+ggsave('generic456.png', width=32, height=16)
+
+```
+
+```{r, echo=FALSE}
+knitr::include_graphics('generic456.png')
+```
+
+------------------------------------------------------------------------
+
+<h3 style="font-size: 24px;">
+
+The Composition of the Approved Reference Drug
+
+</h3>
+
+
+::: {.notes}
+
+Afterwards, I further analyzed the reference drug.
+There were some reference drugs that have been give special title like orphan drug and accelerated assessment drug.
+The venn plot shows that only reference drug can be granted as orphan drug or accelerated assessment drug. and some drugs had both two different titles at the same time.
+
+Orphan drugs will receive some subsidies and tax reductions, while the accelerated assessment drugs' appvoval time can be shorten. I have planned to analyze approval time of accelerated assessment drugs, but the database doesn't have such data. 
+
+the number of approved reference drugs and orphan drugs was increasing, but in recent years EMA looks become less willing to grant a drug accelerated assessment qualification.
+:::
+```{r, include=FALSE,echo=FALSE}
+
+# Approved Orphan & Accelerated Assessment Medicine
+orphan_accelerate_drug <- Drug %>% 
+  filter(reference == TRUE) %>%
+  filter(year >= 2000 & year <= 2023) %>%
+  filter(authorisation_status == "authorised") %>%
+  mutate(reference_drug_genre = case_when(orphan_medicine == FALSE & accelerated_assessment == FALSE ~ "reference_only",
+                                orphan_medicine == TRUE & accelerated_assessment == FALSE ~ "orphan_only",
+                                accelerated_assessment == TRUE ~ "accelerated",
+                                TRUE ~ NA_character_)) 
+
+# Count by Year
+orphan_accelerate_drug_count_by_year <- orphan_accelerate_drug %>%
+  count(year, reference_drug_genre) %>%
+  tidyr::pivot_wider(
+    names_from = reference_drug_genre,
+    values_from = n,
+    values_fill = 0
+  ) %>%
+  tidyr::pivot_longer(
+    cols = c(reference_only, orphan_only, accelerated),
+    names_to = "Genre",
+    values_to = "count"
+  )
+
+# defining color
+orphan_colors <- c("reference_only" = "#975ce6", "orphan_only" = "#f5f264", "accelerated" = "#3b70c4")
+
+# ggplot
+p7 <- ggplot(orphan_accelerate_drug_count_by_year, aes(x = year, y = count, fill = Genre)) +
+  geom_col() +
+  scale_x_continuous(breaks = seq(2000, 2023, 5)) +
+  scale_fill_manual(values = orphan_colors) +
+  labs(
+    title = "Number of Authorized Reference Drugs per Year by Genre",
+    x = "Year",
+    y = "Count"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.title.x = element_text(size = 30),
+    axis.title.y = element_text(size = 30),
+    axis.text.x = element_text(size = 30),
+    axis.text.y = element_text(size = 30),
+    legend.title = element_text(size = 30),
+    legend.text = element_text(size = 30),
+    title = element_text(size = 40),
+    legend.position = "bottom" 
+  )
+
+# stacked bar plot
+p7
+
+ggsave('reference1.png',width=16, height=9)
+
+# create id colunm
+orphan_accelerate_drug <- orphan_accelerate_drug %>%
+  mutate(id = row_number())
+
+# create set1
+set1 <- orphan_accelerate_drug$id
+
+# create set2
+set2 <- orphan_accelerate_drug %>%
+  filter(orphan_medicine == TRUE) %>%
+  pull(id)
+
+# create set3
+set3 <- orphan_accelerate_drug %>%
+  filter(accelerated_assessment == TRUE) %>%
+  pull(id)
+
+# use ggvenn to create venn
+
+venn_data <- (list(Reference = set1, Orphan = set2, Accelerated = set3))
+
+p8 <- ggvenn(venn_data, set_name_size = 15, text_size = 13) + 
+  scale_fill_manual(values = c("#975ce6", "#f5f264", "#3b70c4"))
+
+p8
+
+ggsave('reference2.png',width=20, height=20)
+
+p8 + p7
+
+p87 <- p8+p7
+
+p87
+
+ggsave('reference3.png', width=32, height=16)
+```
+
+```{r, echo=FALSE}
+knitr::include_graphics('reference3.png')
+```
+
+------------------------------------------------------------------------
+
+<h3 style="font-size: 24px;">
+
+Common Indications, Approval Year, and Holder of Orphan Drugs
+
+</h3>
+
+::: {.notes}
+
+Finally, I visualized the common indications, approval year and holder of orphan drugs and accelerated assessment drugs.
+
+I only remained indications with more than 3 approved drugs. wo can see hemophilia, Acute leukemia, myeloma, and lymphoma. so, blood diseases and even blood tumor were the focaus of orphan drug research.
+
+:::
+
+```{r, include=FALSE,echo=FALSE}
+
+orphan_drug_indication <- orphan_accelerate_drug %>%
+  filter(reference_drug_genre == "orphan_only") %>%
+  separate_rows(therapeutic_area, sep = ";") %>%
+  mutate(therapeutic_area = str_trim(therapeutic_area)) %>%
+  count(therapeutic_area, sort = TRUE) %>%
+  slice(1:7)
+
+orphan_drug_indication <- orphan_accelerate_drug %>%
+  filter(reference_drug_genre == "orphan_only") %>%
+  separate_rows(therapeutic_area, sep = ";") %>%
+  mutate(therapeutic_area = str_trim(therapeutic_area)) %>%
+  semi_join(orphan_drug_indication, by = "therapeutic_area") %>%
+  separate_rows(therapeutic_area, sep = ";") %>%
+  mutate(therapeutic_area = str_trim(therapeutic_area))
+
+top_drugs <- orphan_drug_indication %>%
+  count(therapeutic_area, sort = TRUE) %>%
+  slice(1:7) %>%
+  pull(therapeutic_area)
+
+
+p9 <- ggplot(orphan_drug_indication %>% filter(therapeutic_area %in% top_drugs),
+       aes(x = year, y = holder_name, color = therapeutic_area)) +
+  geom_point(size = 3) +
+  facet_wrap(~ therapeutic_area, ncol = 2, scales = "free_y") +
+  scale_x_continuous(breaks = seq(2011, 2023, 3)) +
+  labs(
+    title = "",
+    x = "Approval Year",
+    y = "Holder Name"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 10),
+    legend.position = "right",
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size = 12),
+    strip.text = element_text(size = 12),
+    strip.background = element_rect(fill = "#f5f5f5"),
+    title = element_text(size = 16)
+  )
+
+p9
+
+ggsave('orphan1.png',width=16, height=9)
+```
+
+```{r, echo=FALSE}
+knitr::include_graphics('orphan1.png')
+```
+
+------------------------------------------------------------------------
+
+<h3 style="font-size: 24px;">
+
+Common Indications, Approval Year, and Holder of Accelerated Assessment Drugs
+
+</h3>
+
+::: {.notes}
+
+as for the accelerated assessment drugs, I only remained indications with 2 or more than 2 approved drugs. wo can see indications were diverse but there was still multiple myeloma. I would say EMA has given the most attention to myeloma in the past decades.
+
+:::
+
+```{r, include=FALSE,echo=FALSE}
+accelerated_indication <- orphan_accelerate_drug %>%
+  filter(reference_drug_genre == "accelerated") %>%
+  separate_rows(therapeutic_area, sep = ";") %>%
+  mutate(therapeutic_area = str_trim(therapeutic_area)) %>%
+  count(therapeutic_area, sort = TRUE) %>%
+  slice(1:5)
+
+accelerated_indication <- orphan_accelerate_drug %>%
+  filter(reference_drug_genre == "accelerated") %>%
+  separate_rows(therapeutic_area, sep = ";") %>%
+  mutate(therapeutic_area = str_trim(therapeutic_area)) %>%
+  semi_join(accelerated_indication, by = "therapeutic_area") %>%
+  separate_rows(therapeutic_area, sep = ";") %>%
+  mutate(therapeutic_area = str_trim(therapeutic_area))
+
+top2_drugs <- accelerated_indication %>%
+  count(therapeutic_area, sort = TRUE) %>%
+    slice(1:5) %>%
+  pull(therapeutic_area)
+
+
+p10 <- ggplot(accelerated_indication %>% filter(therapeutic_area %in% top2_drugs),
+       aes(x = year, y = holder_name, color = therapeutic_area)) +
+  geom_point(size = 3) +
+  facet_wrap(~ therapeutic_area, ncol = 2, scales = "free_y") +
+  labs(
+    title = "",
+    x = "Approval Year",
+    y = "Holder Name"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 10),
+    legend.position = "right",
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size = 12),
+    strip.text = element_text(size = 12),
+    strip.background = element_rect(fill = "#f5f5f5"),
+    title = element_text(size = 16)
+  )
+
+p10
+
+ggsave('accelerated1.png',width=16, height=9)
+```
+
+```{r, echo=FALSE}
+knitr::include_graphics('accelerated1.png')
+```
+
+::: {.panel-tabset}
+
+### Tab A
+
+hang
+
+### Tab B
+
+knitr::include_graphics('generic456.png')
+
+:::
+
+
