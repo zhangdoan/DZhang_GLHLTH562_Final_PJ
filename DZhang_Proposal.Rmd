@@ -1,0 +1,297 @@
+---
+title: "Proposal of Final Project Proposal"
+author: "Daoheng Zhang"
+date: "2023-04-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Section 1 - Introduction: 
+
+The data comes from the European Medicines Agency (EMA) via Miquel Anglada Girotto on GitHub.This is the data for TidyTuesday in 03/14/2023. The European Medicines Agency (EMA) is one of the primary institutions that pharmaceutical companies must interact with to develop and market new drugs. However, publicly available information on EMA's webpage is only accessible through navigation but not unbiased exploration. To address this issue, a small library called EMA_webScrapping was developed using RSelenium package to scrape and explore published information for each drug in the EMA.
+
+Through structure-activity relationship (SAR) studies, optimized compounds that meet basic biological activity are selected as candidate drugs and enter into development. Drug development requires pre-clinical studies, including toxicology, pharmacokinetics (PK), chemical manufacture and control (CMC), and so on. After all studies are completed, an investigational new drug (IND) application is submitted to the regulatory agency for approval.
+
+Clinical trials can only be conducted after obtaining IND approval for candidate drugs. Phase I clinical trials (preliminary clinical pharmacology and human safety evaluation), Phase II clinical trials (preliminary evaluation of the effectiveness and safety of the new drug, and providing a basis for the design of Phase III clinical trials and determination of the dosage regimen), and Phase III clinical trials (usually involving 100-500 clinical and inpatient patients, to obtain further efficacy data and identify adverse effects) must be completed. Only when all three stages of clinical trials are completed and all data and information are analyzed, can the safety and efficacy of the drug be proven, and the new drug holder can submit a new drug application (NDA) to the regulatory authority (FDA in the US, EMA in the EU).
+
+All drugs in this database are drugs that have been submitted for NDA, including human and veterinary drugs. As previously mentioned, drugs submitted for NDA must have been validated for safety and efficacy in pre-clinical research and clinical trials. Additionally, the drug sponsor typically has had long-term communication with the regulatory agency (FDA or EMA) and has modified and improved the clinical trials based on their advice. Despite this, a certain proportion of drug applications for marketing authorization will be rejected. For controversial drugs, the regulatory agency will organize an advisory committee to conduct a public vote after considering many factors such as drug economics and patient treatment value. Although the results of this vote are not the final decision for NDA, it will affect the regulatory agency's final decision. Typically, NDAs that receive unfavorable results from the advisory committee will be withdrawn by the drug sponsor.
+
+```{r, include=FALSE}
+
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(readr)
+library(dataReporter)
+library(dplyr)
+library(stringr)
+library(ggvenn)
+
+```
+
+## Section 2 - Data: 
+Usually, drugs submitted for market approval to the EMA have two characteristics: (1) they have obtained good safety and efficacy data in Phase I/II/III clinical trials (companies will not easily submit applications for marketing), and usually receive positive feedback during communication with regulatory agencies; (2) they have already been approved for marketing in other regions such as the US FDA. Since FDA reviews are more stringent, pharmaceutical companies typically choose to submit their applications to the FDA first. Drugs that are approved by the FDA often have a high probability of being approved by EMA in Europe.
+
+```{r}
+
+# load data
+drug_raw <- readr::read_csv('../data/drug_raw.csv')
+
+```
+
+# Variables
+
+1. category, which divides drugs into human use and veterinary use. Here, I mainly focus on human use drugs.
+
+2. Therapeutic_area: a character class variable that encompasses the indications submitted for approval of the drug. Each drug may have multiple indications, such as drugs used to treat solid tumors, so splitting indications is a necessary task. 
+
+3. authorisation_status: authorized，refused, and withdrawn
+
+4. generic: FALSE or TRUE
+
+5. biosimilar: FALSE or TRUE
+
+6. brandname: FALSE or TRUE
+
+7. accelerated_assessment: FALSE or TRUE
+
+8. orphan_medicine: FALSE or TRUE
+
+9. marketing_authorisation_date: authorized or withdrawn date
+
+10. date_of_refusal_of_marketing_authorisation: refused date
+
+11. marketing_authorisation_holder_company_name: I use this name created a new column: holder_name. "holder_name" is the part of the full enterprise name before the first space, usually the name of the enterprise. I removed suffixes such as "Limited Company". Some enterprise names are very long, so I selected several that are more prominent in my presentation and changed their "holder_name" to commonly used abbreviations. 
+
+4. year: I added a column labeled 'year' for future filtering purposes. When a drug is authorized, the year refers to the year in which the drug was approved. When a drug is refused, the year refers to the year in which the drug application was rejected. When a drug is withdrawn, the year refers to the year in which the drug was approved (there is no separate line to record the year of withdrawal).
+```{r}
+
+# data wrangling
+
+drugs <- drug_raw %>% filter(category == "human") %>%
+  filter(!is.na(marketing_authorisation_date) | !is.na(date_of_refusal_of_marketing_authorisation)) %>%
+  mutate(holder_name = str_extract(marketing_authorisation_holder_company_name, "\\w+")) %>%
+  mutate(holder_name = case_when(
+    holder_name == "Les" ~ "Servier",
+    holder_name == "Janssen" ~ "J&J",
+    holder_name == "Eli" ~ "Eli Lilly",
+    holder_name == "Bristol" ~ "BristolMyersSquibb",
+    holder_name == "N" ~ "Organon",
+    TRUE ~ holder_name
+  )) %>%
+  mutate(brandname = ifelse(generic == FALSE & biosimilar == FALSE, TRUE, FALSE)) %>%
+    mutate(year = case_when(
+    authorisation_status == "authorised" ~ as.numeric(substr(marketing_authorisation_date, 1, 4)),
+    authorisation_status == "refused" ~ as.numeric(substr(date_of_refusal_of_marketing_authorisation, 1, 4)),
+    authorisation_status == "withdrawn" ~ as.numeric(substr(marketing_authorisation_date, 1, 4))
+  )) 
+
+drugs <- subset(drugs, select = -c(medicine_name, common_name, active_substance, product_number, patient_safety, atc_code, additional_monitoring, conditional_approval, exceptional_circumstances, pharmacotherapeutic_group, date_of_opinion, decision_date, revision_number, condition_indication, species, first_published, revision_date, url))
+
+
+
+print(drugs)
+
+```
+
+```{r}
+makeCodebook(drugs, replace=TRUE)
+```
+
+
+```{r}
+saveRDS(drugs, file = "../data/drugs.rds")
+```
+
+## Section 3 - Data analysis plan:
+
+Authorized Drugs Per Year
+Although there have been fluctuations, the number of drugs approved for listing by EMA has been on an upward trend in the past 3 decades.
+```{r, include=FALSE}
+
+Authorized_drugs <- drugs %>%
+  filter(authorisation_status == "authorised") %>%
+  filter(year >= 2000) %>%
+  group_by(year) %>%
+  count()
+
+print(Authorized_drugs)
+
+# Create line plot
+line_plot <- ggplot(Authorized_drugs, aes(x = year, y = n)) +
+  geom_line() +
+  geom_point() +
+  scale_x_continuous(breaks = seq(min(Authorized_drugs$year, na.rm = TRUE), max(Authorized_drugs$year, na.rm = TRUE), by = 5)) +
+  labs(
+    title = "Number of Authorized Drugs per Year",
+    x = "Year",
+    y = "Count"
+  ) +
+  theme_minimal()
+
+```
+
+```{r}
+# Print line plot
+print(line_plot)
+```
+
+
+## Most Frequent Indication in EMA Approved Drugs
+
+Of all the drugs approved for marketing by EMA since 2000, diabetes drugs have the highest number, including a total of 88 drugs for Type 2 and Type 1 (displayed as Diabetes Mellitus). The following are HIV infections drugs, non-small cell lung cancer drugs, arthritis drugs, immunization drugs, and hypertension drugs in order.
+
+```{r, echo=FALSE}
+
+## Find the indications for all drugs in the database, count their quantity and sort them in descending order.
+disease_counts <- drugs %>%
+  filter(year >= 2000) %>%
+  filter(authorisation_status == "authorised") %>%
+  separate_rows(therapeutic_area, sep = ";") %>%
+  mutate(therapeutic_area = str_trim(therapeutic_area)) %>%
+  count(therapeutic_area, sort = TRUE)
+
+disease_counts
+
+# Select the top 10 diseases, and create the bar plot
+
+top_10_diseases <- disease_counts %>%
+  top_n(10, n)
+
+bar_plot <- ggplot(top_10_diseases, aes(x = reorder(therapeutic_area, n), y = n)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(
+    title = "Top 10 Most Frequent Indication in EMA Approved Drugs",
+    x = "Indication",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+```
+```{r}
+print(bar_plot)
+```
+
+
+##  Authorization status
+
+This section mainly focuses on examining the authorisation status of drugs. Withdrawn drugs account for a certain proportion every year, and since 2005, there have been drug applications that were refused. In the final presentation, I hope to separate brand-name drugs from generic & biosimilar drugs and examine their authorisation status between 2000-2023.
+```{r, echo=FALSE}
+
+drugs_status <- drugs %>%
+  mutate(id = row_number())
+
+scatter_plot <- ggplot(drugs_status, aes(x = year, y = id, color = authorisation_status)) +
+  geom_point(alpha = 0.6) +
+  scale_x_continuous(breaks = seq(min(drugs_status$year, na.rm = TRUE), max(drugs_status$year, na.rm = TRUE), by = 5)) +
+  scale_color_manual(values = c("authorised" = "#43cc81", "refused" = "#d6625c", "withdrawn" = "blue")) +
+  labs(
+    title = "Authorisation Status by Year",
+    x = "Year",
+    y = "Drug ID"
+  ) +
+  theme_minimal() +
+  theme(legend.title = element_blank(),
+        axis.line.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.text.y = element_blank())
+```
+
+```{r}
+# Display the plot
+print(scatter_plot)
+```
+
+
+When brandname is FALSE, both orphan_medicine and express_assessment are also FALSE, which means that generic drugs and biosimilars cannot be granted eligibility for orphan medicine and express assessment. When fisrt_in_class is TRUE, only some drugs will be eligible for orphan medicine and express assessment.
+```{r, echo=FALSE}
+
+grouped_drug_data <- drugs %>% 
+  group_by(
+    brandname, 
+    orphan_medicine, 
+    accelerated_assessment
+  ) %>%
+  summarise(count = n())
+```
+
+```{r}
+print(grouped_drug_data)
+```
+
+```{r, echo=FALSE}
+orphan_accelerate_drug <- drugs %>% 
+  filter(brandname == TRUE) %>%
+  filter(year >= 2000 & year <= 2023) %>%
+  filter(authorisation_status == "authorised") %>%
+  mutate(bn_drug_genre = case_when(orphan_medicine == FALSE & accelerated_assessment == FALSE ~ "brandname",
+                                orphan_medicine == TRUE & accelerated_assessment == FALSE ~ "orphan",
+                                accelerated_assessment == TRUE ~ "accelerated",
+                                TRUE ~ NA_character_)) 
+
+orphan_drug_indication <- orphan_accelerate_drug %>%
+  filter(bn_drug_genre == "orphan") %>%
+  separate_rows(therapeutic_area, sep = ";") %>%
+  mutate(therapeutic_area = str_trim(therapeutic_area)) %>%
+  count(therapeutic_area, sort = TRUE) %>%
+  top_n(7, n)
+
+top_orphan_disease <- ggplot(orphan_drug_indication, aes(x = reorder(therapeutic_area, n), y = n)) +
+  geom_bar(stat = "identity", fill = "#f5f264") +
+  coord_flip() +
+  labs(
+    title = "Top 7 Indication in Authurised Orphan Drugs",
+    x = "Indication",
+    y = "Frequency"
+  ) +
+  theme_minimal() +
+  coord_flip() + 
+  theme(
+    axis.title.x = element_text(size = 10),
+    axis.title.y = element_text(size = 10),
+    axis.text.x = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    title = element_text(size = 10)
+  )
+
+```
+
+My expectation for orphan/accelerated assessment drug part is to split out the most frequently occurring indications and holder names, and present the top 10 indications and holders.
+```{r}
+print(top_orphan_disease)
+```
+
+```{r, echo=FALSE}
+orphan_drug_holder <- orphan_accelerate_drug %>%
+  filter(bn_drug_genre == "orphan") %>%
+  group_by(holder_name) %>%
+  summarise(application_count = n()) %>%
+  ungroup() %>%
+  arrange(desc(application_count)) %>%
+  head(10)
+
+top_orphan_holders <- ggplot(orphan_drug_holder, aes(x = application_count, y = holder_name)) +
+  geom_bar(stat = "identity", fill = "#f5f264") +
+  coord_flip() +
+  labs(
+    title = "Top 10 Holders in Authurised Orphan Drugs",
+    x = "application count",
+    y = "holder_name"
+  ) +
+  theme_minimal() +
+  coord_flip() + 
+  theme(
+    axis.title.x = element_text(size = 10),
+    axis.title.y = element_text(size = 10),
+    axis.text.x = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    title = element_text(size = 10)
+  )
+```
+
+```{r}
+top_orphan_holders
+```
